@@ -22,7 +22,7 @@
 #define WIFI_PASS       "13983039985"
 #define TCP_PORT        8888
 
-#define CAR_MAC_ADDR    {0xe0, 0x72, 0xa1, 0xf3, 0xb9, 0x80}
+#define CAR_MAC_ADDR    {0xE0, 0x72, 0xA1, 0xF3, 0xB9, 0x80}
 
 #define MPU_SDA_PIN     8
 #define MPU_SCL_PIN     9
@@ -45,10 +45,9 @@ void sensor_task(void *pvParameters)
     protocol_init_packet(&packet);
 
     uint8_t tx_buffer[16];
-    binary_packet_t espnow_packet;
+    uint8_t espnow_buf[sizeof(binary_packet_t)];
     uint32_t last_send = 0;
     uint32_t frame_count = 0;
-    uint32_t espnow_fail_count = 0;
 
     static int mpu_error_count = 0;
     static int mpu_reset_count = 0;
@@ -169,28 +168,9 @@ void sensor_task(void *pvParameters)
             }
 
             // ESP-NOW -> 小车
-            memset(&espnow_packet, 0, sizeof(binary_packet_t));
-            espnow_packet.header = 0xAA;
-            espnow_packet.mode = (uint8_t)packet.mode;
-            espnow_packet.progress = (uint8_t)(packet.switch_progress * 100);
-
-            for (int i = 0; i < 5; i++) {
-                espnow_packet.fingers[i] = packet.finger_percent[i];
-            }
-
-            espnow_packet.pitch = (int16_t)(packet.pitch * 10);
-            espnow_packet.roll = (int16_t)(packet.roll * 10);
-            espnow_packet.yaw = (int16_t)(packet.yaw * 10);
-
-            uint8_t *p = (uint8_t *)&espnow_packet;
-            espnow_packet.checksum = 0;
-            for (size_t i = 0; i < sizeof(binary_packet_t) - 1; i++) {
-                espnow_packet.checksum += p[i];
-            }
-
-            esp_err_t espnow_ret = espnow_send_data(&espnow_packet);
-            if (espnow_ret != ESP_OK) {
-                espnow_fail_count++;
+            int espnow_len = protocol_pack_binary(&packet, espnow_buf, sizeof(espnow_buf));
+            if (espnow_len > 0) {
+                espnow_send_data_async((binary_packet_t *)espnow_buf);
             }
 
             last_send_time = now;
@@ -201,7 +181,7 @@ void sensor_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(10));
 
         if (frame_count % 100 == 0 && frame_count > 0) {
-            ESP_LOGI(TAG, "已发送 %lu 帧 (ESP-NOW失败: %lu)", frame_count, espnow_fail_count);
+            ESP_LOGI(TAG, "已发送 %lu 帧 (ESP-NOW失败: %lu)", frame_count, espnow_get_fail_count());
 
             if (frame_count % 500 == 0) {
                 ESP_LOGI(TAG, "手指: T=%d%% I=%d%% M=%d%% R=%d%% P=%d%%",
