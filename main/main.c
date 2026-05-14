@@ -18,18 +18,15 @@
 #include "protocol.h"
 #include "espnow_comm.h"
 
-// ==================== 配置参数 ====================
-#define WIFI_SSID           "tang."
-#define WIFI_PASS           "13983039985"
-#define TCP_PORT            8888
+#define WIFI_SSID       "tang."
+#define WIFI_PASS       "13983039985"
+#define TCP_PORT        8888
 
-// 小车端 MAC 地址（需要修改为实际小车端的 MAC）
-#define CAR_MAC_ADDR        {0xe0, 0x72, 0xa1, 0xf3, 0xb9, 0x80}
+#define CAR_MAC_ADDR    {0xe0, 0x72, 0xa1, 0xf3, 0xb9, 0x80}
 
-// 恢复原来的引脚
-#define MPU_SDA_PIN         8
-#define MPU_SCL_PIN         9
-#define VIB_MOTOR_PIN       10
+#define MPU_SDA_PIN     8
+#define MPU_SCL_PIN     9
+#define VIB_MOTOR_PIN   10
 
 #define SEND_INTERVAL_MS    50
 #define MODE_HOLD_TIME_MS   2000
@@ -37,14 +34,11 @@
 static const char *TAG = "Main";
 static volatile bool g_running = true;
 
-// ==================== 传感器任务 ====================
-
 void sensor_task(void *pvParameters)
 {
     esp_task_wdt_delete(NULL);
 
     int client_sock = (intptr_t)pvParameters;
-
     ESP_LOGI(TAG, "传感器任务启动，socket=%d", client_sock);
 
     gesture_data_packet_t packet;
@@ -98,13 +92,13 @@ void sensor_task(void *pvParameters)
 
             if (mpu_error_count >= MPU_ERROR_THRESHOLD) {
                 if (mpu_reset_count < 3) {
-                    ESP_LOGE(TAG, "MPU6050连续失败，执行软件复位(%d/3)", mpu_reset_count + 1);
+                    ESP_LOGE(TAG, "MPU6050连续失败，软件复位(%d/3)", mpu_reset_count + 1);
                     mpu6050_reset();
                     mpu_reset_count++;
                     mpu_error_count = 0;
                     vibration_trigger(VIB_LONG);
                 } else {
-                    ESP_LOGE(TAG, "MPU6050硬件可能损坏，切换到纯手指模式");
+                    ESP_LOGE(TAG, "MPU6050可能损坏，切换纯手指模式");
                     attitude.pitch = 0;
                     attitude.roll = 0;
                     attitude.yaw = 0;
@@ -149,35 +143,32 @@ void sensor_task(void *pvParameters)
             packet.switch_progress = mode_manager_get_progress();
 
             for (int i = 0; i < 5; i++) {
-                packet.finger_raw[i] = g_fingers[i].current_raw;
                 packet.finger_percent[i] = g_fingers[i].bend_percent;
-                last_sent_percent[i] = g_fingers[i].bend_percent;
             }
 
             packet.pitch = attitude.pitch;
             packet.roll = attitude.roll;
             packet.yaw = attitude.yaw;
 
-            // 1. 通过 TCP 发送给 Unity（保留原有功能）
+            // TCP -> Unity
             int pack_len = protocol_pack_binary(&packet, tx_buffer, sizeof(tx_buffer));
             if (pack_len > 0) {
                 int sent = send(client_sock, tx_buffer, pack_len, MSG_DONTWAIT);
-
                 if (sent < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         ESP_LOGD(TAG, "TCP缓冲区满，丢弃1帧");
-                    } else if (errno == 104 || errno == ECONNRESET || errno == EPIPE) {
+                    } else if (errno == ECONNRESET || errno == EPIPE) {
                         ESP_LOGW(TAG, "连接被重置，准备重连");
                         break;
                     } else {
-                        ESP_LOGW(TAG, "发送错误: %d，继续", errno);
+                        ESP_LOGW(TAG, "TCP发送错误: %d", errno);
                     }
                 } else if (sent == pack_len) {
                     frame_count++;
                 }
             }
 
-            // 2. 通过 ESP-NOW 发送给小车（新增功能）
+            // ESP-NOW -> 小车
             memset(&espnow_packet, 0, sizeof(binary_packet_t));
             espnow_packet.header = 0xAA;
             espnow_packet.mode = (uint8_t)packet.mode;
@@ -213,11 +204,9 @@ void sensor_task(void *pvParameters)
             ESP_LOGI(TAG, "已发送 %lu 帧 (ESP-NOW失败: %lu)", frame_count, espnow_fail_count);
 
             if (frame_count % 500 == 0) {
-                ESP_LOGI(TAG, "手指状态: T=%d%% I=%d%% M=%d%% R=%d%% P=%d%%",
-                         g_fingers[0].bend_percent,
-                         g_fingers[1].bend_percent,
-                         g_fingers[2].bend_percent,
-                         g_fingers[3].bend_percent,
+                ESP_LOGI(TAG, "手指: T=%d%% I=%d%% M=%d%% R=%d%% P=%d%%",
+                         g_fingers[0].bend_percent, g_fingers[1].bend_percent,
+                         g_fingers[2].bend_percent, g_fingers[3].bend_percent,
                          g_fingers[4].bend_percent);
             }
         }
@@ -228,11 +217,9 @@ void sensor_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-// ==================== 主函数 ====================
-
 void app_main(void)
 {
-    ESP_LOGI(TAG, "手势控制小车系统 [WiFi+ESP-NOW版]");
+    ESP_LOGI(TAG, "手势控制小车系统 [WiFi+ESP-NOW]");
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -250,7 +237,7 @@ void app_main(void)
         ESP_LOGI(TAG, "MPU6050初始化成功");
         vibration_trigger(VIB_SHORT);
     } else {
-        ESP_LOGW(TAG, "MPU6050初始化失败(%d)，继续纯手指模式", ret);
+        ESP_LOGW(TAG, "MPU6050初始化失败(%d)，纯手指模式", ret);
     }
 
     mode_manager_init(MODE_HOLD_TIME_MS, 15.0f, 45.0f);
@@ -258,7 +245,6 @@ void app_main(void)
     ESP_ERROR_CHECK(vibration_motor_init(VIB_MOTOR_PIN));
     vibration_trigger(VIB_SHORT);
 
-    // 1. 初始化 WiFi 连接 Unity（保留原有功能）
     if (!wifi_manager_init_sta(WIFI_SSID, WIFI_PASS)) {
         ESP_LOGE(TAG, "WiFi初始化失败");
         return;
@@ -270,27 +256,24 @@ void app_main(void)
         return;
     }
 
-    const char* ip = wifi_manager_get_ip();
+    const char *ip = wifi_manager_get_ip();
     if (ip) {
         ESP_LOGI(TAG, "========================================");
-        ESP_LOGI(TAG, "IP地址: %s", ip);
-        ESP_LOGI(TAG, "端口: %d", TCP_PORT);
-        ESP_LOGI(TAG, "MPU6050: SDA=%d SCL=%d", MPU_SDA_PIN, MPU_SCL_PIN);
+        ESP_LOGI(TAG, "IP: %s  端口: %d", ip, TCP_PORT);
+        ESP_LOGI(TAG, "MPU: SDA=%d SCL=%d", MPU_SDA_PIN, MPU_SCL_PIN);
         ESP_LOGI(TAG, "========================================");
     }
 
-    // 2. 初始化 ESP-NOW 连接小车（新增功能，复用已初始化的 WiFi）
     uint8_t car_mac[6] = CAR_MAC_ADDR;
 
     uint8_t my_mac[6];
     espnow_get_mac(my_mac);
-    ESP_LOGI(TAG, "本机 MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "本机MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              my_mac[0], my_mac[1], my_mac[2],
              my_mac[3], my_mac[4], my_mac[5]);
-    ESP_LOGI(TAG, "目标小车 MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "小车MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              car_mac[0], car_mac[1], car_mac[2],
              car_mac[3], car_mac[4], car_mac[5]);
-    ESP_LOGI(TAG, "========================================");
 
     ret = espnow_comm_init_send_with_external_wifi(car_mac);
     if (ret != ESP_OK) {
@@ -301,14 +284,12 @@ void app_main(void)
     ESP_LOGI(TAG, "WiFi+ESP-NOW已就绪，等待Unity连接...");
     vibration_trigger(VIB_LONG);
 
-    // 3. 创建 TCP 服务器（保留原有功能）
     int server_sock = wifi_manager_create_tcp_server(TCP_PORT);
     if (server_sock < 0) {
         ESP_LOGE(TAG, "创建TCP服务器失败");
         return;
     }
 
-    // 4. 主循环（自动重连）
     while (1) {
         int client_sock = wifi_manager_wait_tcp_client(server_sock, 0);
 
@@ -316,16 +297,9 @@ void app_main(void)
             ESP_LOGI(TAG, "Unity已连接，启动传感器任务");
             vibration_trigger(VIB_DOUBLE);
 
-            intptr_t sock_param = client_sock;
-
             BaseType_t task_ret = xTaskCreatePinnedToCore(
-                sensor_task,
-                "sensor_task",
-                4096,
-                (void*)sock_param,
-                2,
-                NULL,
-                1
+                sensor_task, "sensor_task", 4096,
+                (void *)(intptr_t)client_sock, 2, NULL, 1
             );
 
             if (task_ret != pdPASS) {
